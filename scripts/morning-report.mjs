@@ -2,50 +2,14 @@
 // 매일 개장전 리포트: 예탁금/신용잔고/코스피·코스닥 거래대금/미 10년물 국채금리
 // 필요 환경변수: DATA_GO_KR_KEY (URL-encoded), FRED_API_KEY
 
+import { nowKst, toYyyymmdd, addMonths, isWeekend, isHoliday, fetchJson } from "./lib/dateKst.mjs";
+
 const DATA_GO_KR_KEY = process.env.DATA_GO_KR_KEY;
 const FRED_API_KEY = process.env.FRED_API_KEY;
 
 if (!DATA_GO_KR_KEY || !FRED_API_KEY) {
   console.error("DATA_GO_KR_KEY / FRED_API_KEY 환경변수가 필요합니다.");
   process.exit(1);
-}
-
-const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
-
-function nowKst() {
-  if (process.env.TEST_TODAY) {
-    // YYYYMMDD, for manual testing/backfill of a specific KST date
-    const s = process.env.TEST_TODAY;
-    return new Date(Date.UTC(Number(s.slice(0, 4)), Number(s.slice(4, 6)) - 1, Number(s.slice(6, 8))));
-  }
-  return new Date(Date.now() + KST_OFFSET_MS);
-}
-
-function toYyyymmdd(d) {
-  return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
-}
-
-function addMonths(d, delta) {
-  const copy = new Date(d.getTime());
-  copy.setUTCMonth(copy.getUTCMonth() + delta);
-  return copy;
-}
-
-async function fetchJson(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  return res.json();
-}
-
-async function isHoliday(kstDate) {
-  const y = kstDate.getUTCFullYear();
-  const m = String(kstDate.getUTCMonth() + 1).padStart(2, "0");
-  const url = `https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo?serviceKey=${DATA_GO_KR_KEY}&solYear=${y}&solMonth=${m}&_type=json&numOfRows=50`;
-  const data = await fetchJson(url);
-  const items = data?.response?.body?.items?.item;
-  const list = Array.isArray(items) ? items : items ? [items] : [];
-  const todayNum = Number(toYyyymmdd(kstDate));
-  return list.some((it) => Number(it.locdate) === todayNum && it.isHoliday === "Y");
 }
 
 /** data.go.kr 일별 통계 오퍼레이션 공통 조회: beginBasDt~endBasDt 구간의 [{date, value}] (날짜 내림차순) */
@@ -122,12 +86,11 @@ async function buildMetric({ baseUrl, operation, field, extraParams, begin, end 
 
 async function main() {
   const today = nowKst();
-  const weekday = today.getUTCDay(); // 0=Sun ... 6=Sat (getUTCDay is fine since we already shifted to KST wall time)
-  if (weekday === 0 || weekday === 6) {
+  if (isWeekend(today)) {
     console.log("SKIP: weekend");
     return;
   }
-  if (await isHoliday(today)) {
+  if (await isHoliday(DATA_GO_KR_KEY, today)) {
     console.log("SKIP: holiday");
     return;
   }

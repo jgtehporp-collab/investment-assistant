@@ -1,0 +1,19 @@
+{
+  "_format": {
+    "description": "증시 일정 F/up 추적 상태 파일. 매주 스크립트가 읽고 갱신합니다.",
+    "item": {
+      "id": "고유 ID (YYYYMMDD-슬러그 형태)",
+      "description": "일정 원문 설명",
+      "raw_date_text": "원본 날짜 표현 (예: '7/14', '7월중순~', '7월말')",
+      "date_from": "YYYY-MM-DD (범위 시작, 추정 포함)",
+      "date_to": "YYYY-MM-DD (범위 끝, 추정 포함)",
+      "category": "domestic_stock | overseas_stock | other",
+      "search_hint": "검색에 쓸 핵심 키워드 (종목명/티커/이슈명)",
+      "status": "pending | done | no_result",
+      "added_at": "YYYY-MM-DD",
+      "resolved_at": "YYYY-MM-DD 또는 null",
+      "result_summary": "F/up 결과 요약 (없으면 null)"
+    }
+  },
+  "items": []
+}
