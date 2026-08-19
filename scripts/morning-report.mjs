@@ -81,6 +81,31 @@ async function buildMetric({ baseUrl, operation, field, extraParams, begin, end 
     value: latest.value,
     dayChangePct: prev ? pctChange(latest.value, prev.value) : null,
     avg3mChangePct: avg3m ? pctChange(latest.value, avg3m) : null,
+    series,
+  };
+}
+
+/** 이미 %인 두 값의 차이(퍼센트포인트). base가 없으면 null. */
+function diffPp(latest, base) {
+  if (base === null || base === undefined) return null;
+  return latest - base;
+}
+
+/** 두 금액 시리즈(날짜 일치)로 비율(%) 시리즈를 만들고, 그 비율의 전일비/3개월평균비를 %p로 계산 */
+function buildRatioMetric(numeratorSeries, denominatorSeries) {
+  const denomByDate = new Map(denominatorSeries.map((r) => [r.date, r.value]));
+  const ratioSeries = numeratorSeries
+    .filter((r) => denomByDate.has(r.date) && denomByDate.get(r.date))
+    .map((r) => ({ date: r.date, value: (r.value / denomByDate.get(r.date)) * 100 }))
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+  if (ratioSeries.length === 0) throw new Error("예탁금 대비 신용잔고 비율 데이터 없음");
+  const latest = ratioSeries[0];
+  const prev = ratioSeries[1] ?? null;
+  const avg3m = threeMonthAvg(ratioSeries, latest.date);
+  return {
+    value: latest.value,
+    dayChangePp: prev ? diffPp(latest.value, prev.value) : null,
+    avg3mChangePp: avg3m ? diffPp(latest.value, avg3m) : null,
   };
 }
 
@@ -112,14 +137,14 @@ async function main() {
   const us10yPrev = fredSeries[1] ?? null;
   const us10yDayChangePp = us10yPrev ? us10y.value - us10yPrev.value : null;
 
-  const creditVsDepositPct = pctChange(credit.value, deposit.value) === null ? null : (credit.value / deposit.value) * 100;
+  const ratio = buildRatioMetric(credit.series, deposit.series);
 
   const dateLabel = `${today.getUTCFullYear()}.${String(today.getUTCMonth() + 1).padStart(2, "0")}.${String(today.getUTCDate()).padStart(2, "0")}`;
 
   const message = `${dateLabel} 개장전 정보 말씀드립니다.
 
 주식예탁금잔액 ${fmtJo(deposit.value)}(전일비 ${fmtPct(deposit.dayChangePct)}, 3개월평균비 ${fmtPct(deposit.avg3mChangePct)})
-신용잔고잔액 ${fmtJo(credit.value)}(예탁금잔액대비 ${creditVsDepositPct.toFixed(1)}%, 전일비 ${fmtPct(credit.dayChangePct)}, 3개월평균비 ${fmtPct(credit.avg3mChangePct)})
+신용잔고잔액 ${fmtJo(credit.value)}(예탁금잔액대비 ${ratio.value.toFixed(1)}%[전일비 ${fmtPctP(ratio.dayChangePp)}, 3개월평균비 ${fmtPctP(ratio.avg3mChangePp)}], 전일비 ${fmtPct(credit.dayChangePct)}, 3개월평균비 ${fmtPct(credit.avg3mChangePct)})
 코스피 일평균거래대금 ${fmtJo(kospi.value)}(전일비 ${fmtPct(kospi.dayChangePct)}, 3개월평균비 ${fmtPct(kospi.avg3mChangePct)})
 코스닥 일평균거래대금 ${fmtJo(kosdaq.value)}(전일비 ${fmtPct(kosdaq.dayChangePct)}, 3개월평균비 ${fmtPct(kosdaq.avg3mChangePct)})
 미 10년물 국채금리 ${us10y.value.toFixed(2)}%(전일비 ${fmtPctP(us10yDayChangePp)})`;
