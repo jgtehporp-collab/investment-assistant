@@ -42,10 +42,18 @@ export function isWeekend(d) {
   return w === 0 || w === 6;
 }
 
+/** 간헐적 네트워크 실패에 대비해 1회 재시도 (짧은 지연 후) */
 export async function fetchJson(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  return res.json();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+      return await res.json();
+    } catch (err) {
+      if (attempt === 1) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
 }
 
 /** 한국천문연구원 특일정보로 해당 (연,월)의 공휴일 locdate 목록(YYYYMMDD 숫자)을 가져옴 */

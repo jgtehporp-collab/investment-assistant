@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-// 매일 개장전 리포트: 예탁금/신용잔고/코스피·코스닥 거래대금/미 10년물 국채금리
-// 필요 환경변수: DATA_GO_KR_KEY (URL-encoded), FRED_API_KEY
+// 매일 개장전 리포트: 예탁금/신용잔고/코스피·코스닥 거래대금/미 10년물 국채금리/삼전닉스비중
+// 필요 환경변수: DATA_GO_KR_KEY (URL-encoded), FRED_API_KEY, KRX_API_KEY
 
 import { nowKst, toYyyymmdd, addMonths, isWeekend, isHoliday, fetchJson } from "./lib/dateKst.mjs";
 
 const DATA_GO_KR_KEY = process.env.DATA_GO_KR_KEY;
 const FRED_API_KEY = process.env.FRED_API_KEY;
+const KRX_API_KEY = process.env.KRX_API_KEY;
 
-if (!DATA_GO_KR_KEY || !FRED_API_KEY) {
-  console.error("DATA_GO_KR_KEY / FRED_API_KEY 환경변수가 필요합니다.");
+if (!DATA_GO_KR_KEY || !FRED_API_KEY || !KRX_API_KEY) {
+  console.error("DATA_GO_KR_KEY / FRED_API_KEY / KRX_API_KEY 환경변수가 필요합니다.");
   process.exit(1);
 }
 
@@ -35,6 +36,42 @@ async function fetchFredDaily(seriesId, begin, end) {
   return (data.observations || [])
     .filter((o) => o.value !== ".")
     .map((o) => ({ date: o.date.replaceAll("-", ""), value: Number(o.value) }));
+}
+
+/** KRX Open API에서 특정 영업일의 유가증권(코스피) 전종목 시세를 가져옴 */
+async function fetchKrxKospiSnapshot(dateStr) {
+  const url = `https://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd?AUTH_KEY=${KRX_API_KEY}&basDd=${dateStr}`;
+  const data = await fetchJson(url);
+  return data.OutBlock_1 || [];
+}
+
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/** kospiDates(YYYYMMDD 목록)에 대해 삼성전자(005930)+SK하이닉스(000660) 합산 시가총액 시리즈를 구함 */
+async function fetchSamsungHynixCombinedCapSeries(kospiDates) {
+  const rows = await mapWithConcurrency(kospiDates, 6, async (date) => {
+    try {
+      const snapshot = await fetchKrxKospiSnapshot(date);
+      const samsung = snapshot.find((r) => r.ISU_CD === "005930");
+      const hynix = snapshot.find((r) => r.ISU_CD === "000660");
+      if (!samsung || !hynix) return null;
+      return { date, value: Number(samsung.MKTCAP) + Number(hynix.MKTCAP) };
+    } catch {
+      return null; // 개별 날짜 실패는 건너뜀 (3개월평균 계산에 큰 영향 없음)
+    }
+  });
+  return rows.filter(Boolean);
 }
 
 function threeMonthAvg(series, latestDateStr) {
@@ -124,12 +161,16 @@ async function main() {
   const KOFIA_BASE = "https://apis.data.go.kr/1160100/service/GetKofiaStatisticsInfoService";
   const INDEX_BASE = "https://apis.data.go.kr/1160100/service/GetMarketIndexInfoService";
 
-  const [deposit, credit, kospi, kosdaq] = await Promise.all([
+  const [deposit, credit, kospi, kosdaq, kospiMktCap] = await Promise.all([
     buildMetric({ baseUrl: KOFIA_BASE, operation: "getSecuritiesMarketTotalCapitalInfo", field: "invrDpsgAmt", begin, end: today }),
     buildMetric({ baseUrl: KOFIA_BASE, operation: "getGrantingOfCreditBalanceInfo", field: "crdTrFingWhl", begin, end: today }),
     buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "trPrc", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%ED%94%BC", begin, end: today }),
     buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "trPrc", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%EB%8B%A5", begin, end: today }),
+    buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "lstgMrktTotAmt", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%ED%94%BC", begin, end: today }),
   ]);
+
+  const samsungHynixSeries = await fetchSamsungHynixCombinedCapSeries(kospiMktCap.series.map((r) => r.date));
+  const samjeonNixRatio = buildRatioMetric(samsungHynixSeries, kospiMktCap.series);
 
   const fredSeries = await fetchFredDaily("DGS10", addMonths(today, -1), today);
   if (fredSeries.length === 0) throw new Error("FRED 데이터 없음");
@@ -147,7 +188,8 @@ async function main() {
 신용잔고잔액 ${fmtJo(credit.value)}(예탁금잔액대비 ${ratio.value.toFixed(1)}%[전일비 ${fmtPctP(ratio.dayChangePp)}, 3개월평균비 ${fmtPctP(ratio.avg3mChangePp)}], 전일비 ${fmtPct(credit.dayChangePct)}, 3개월평균비 ${fmtPct(credit.avg3mChangePct)})
 코스피 일평균거래대금 ${fmtJo(kospi.value)}(전일비 ${fmtPct(kospi.dayChangePct)}, 3개월평균비 ${fmtPct(kospi.avg3mChangePct)})
 코스닥 일평균거래대금 ${fmtJo(kosdaq.value)}(전일비 ${fmtPct(kosdaq.dayChangePct)}, 3개월평균비 ${fmtPct(kosdaq.avg3mChangePct)})
-미 10년물 국채금리 ${us10y.value.toFixed(2)}%(전일비 ${fmtPctP(us10yDayChangePp)})`;
+미 10년물 국채금리 ${us10y.value.toFixed(2)}%(전일비 ${fmtPctP(us10yDayChangePp)})
+삼전닉스비중 : ${samjeonNixRatio.value.toFixed(1)}%(전일대비 ${fmtPctP(samjeonNixRatio.dayChangePp)}, 3개월평균비 ${fmtPctP(samjeonNixRatio.avg3mChangePp)})`;
 
   console.log(message);
 }
