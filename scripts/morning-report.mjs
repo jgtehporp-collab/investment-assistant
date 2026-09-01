@@ -14,11 +14,11 @@ if (!DATA_GO_KR_KEY || !FRED_API_KEY || !KRX_API_KEY) {
 }
 
 /** data.go.kr 일별 통계 오퍼레이션 공통 조회: beginBasDt~endBasDt 구간의 [{date, value}] (날짜 내림차순) */
-async function fetchDailySeries({ baseUrl, operation, field, extraParams = "", begin, end }) {
+async function fetchDailySeries({ baseUrl, operation, field, extraParams = "", begin, end, label }) {
   const url =
     `${baseUrl}/${operation}?serviceKey=${DATA_GO_KR_KEY}&numOfRows=200&pageNo=1&resultType=json` +
     `&beginBasDt=${toYyyymmdd(begin)}&endBasDt=${toYyyymmdd(end)}${extraParams}`;
-  const data = await fetchJson(url);
+  const data = await fetchJson(url, label);
   const items = data?.response?.body?.items?.item;
   const list = Array.isArray(items) ? items : items ? [items] : [];
   return list
@@ -27,12 +27,12 @@ async function fetchDailySeries({ baseUrl, operation, field, extraParams = "", b
     .sort((a, b) => (a.date < b.date ? 1 : -1));
 }
 
-async function fetchFredDaily(seriesId, begin, end) {
+async function fetchFredDaily(seriesId, begin, end, label) {
   const fmt = (d) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
   const url =
     `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_API_KEY}` +
     `&file_type=json&sort_order=desc&observation_start=${fmt(begin)}&observation_end=${fmt(end)}`;
-  const data = await fetchJson(url);
+  const data = await fetchJson(url, label);
   return (data.observations || [])
     .filter((o) => o.value !== ".")
     .map((o) => ({ date: o.date.replaceAll("-", ""), value: Number(o.value) }));
@@ -41,7 +41,7 @@ async function fetchFredDaily(seriesId, begin, end) {
 /** KRX Open API에서 특정 영업일의 유가증권(코스피) 전종목 시세를 가져옴 */
 async function fetchKrxKospiSnapshot(dateStr) {
   const url = `https://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd?AUTH_KEY=${KRX_API_KEY}&basDd=${dateStr}`;
-  const data = await fetchJson(url);
+  const data = await fetchJson(url, `삼전닉스비중 KRX ${dateStr}`);
   return data.OutBlock_1 || [];
 }
 
@@ -60,7 +60,7 @@ async function mapWithConcurrency(items, limit, fn) {
 
 /** kospiDates(YYYYMMDD 목록)에 대해 삼성전자(005930)+SK하이닉스(000660) 합산 시가총액 시리즈를 구함 */
 async function fetchSamsungHynixCombinedCapSeries(kospiDates) {
-  const rows = await mapWithConcurrency(kospiDates, 6, async (date) => {
+  const rows = await mapWithConcurrency(kospiDates, 3, async (date) => {
     try {
       const snapshot = await fetchKrxKospiSnapshot(date);
       const samsung = snapshot.find((r) => r.ISU_CD === "005930");
@@ -107,9 +107,9 @@ function fmtJo(v, digits = 1) {
   return `${(v / 1e12).toFixed(digits)}조`;
 }
 
-async function buildMetric({ baseUrl, operation, field, extraParams, begin, end }) {
-  const series = await fetchDailySeries({ baseUrl, operation, field, extraParams, begin, end });
-  if (series.length === 0) throw new Error(`데이터 없음: ${operation}${extraParams}`);
+async function buildMetric({ baseUrl, operation, field, extraParams, begin, end, label }) {
+  const series = await fetchDailySeries({ baseUrl, operation, field, extraParams, begin, end, label });
+  if (series.length === 0) throw new Error(`[${label}] 데이터 없음: ${operation}${extraParams}`);
   const latest = series[0];
   const prev = series[1] ?? null;
   const avg3m = threeMonthAvg(series, latest.date);
@@ -162,18 +162,18 @@ async function main() {
   const INDEX_BASE = "https://apis.data.go.kr/1160100/service/GetMarketIndexInfoService";
 
   const [deposit, credit, kospi, kosdaq, kospiMktCap] = await Promise.all([
-    buildMetric({ baseUrl: KOFIA_BASE, operation: "getSecuritiesMarketTotalCapitalInfo", field: "invrDpsgAmt", begin, end: today }),
-    buildMetric({ baseUrl: KOFIA_BASE, operation: "getGrantingOfCreditBalanceInfo", field: "crdTrFingWhl", begin, end: today }),
-    buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "trPrc", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%ED%94%BC", begin, end: today }),
-    buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "trPrc", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%EB%8B%A5", begin, end: today }),
-    buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "lstgMrktTotAmt", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%ED%94%BC", begin, end: today }),
+    buildMetric({ baseUrl: KOFIA_BASE, operation: "getSecuritiesMarketTotalCapitalInfo", field: "invrDpsgAmt", begin, end: today, label: "예탁금" }),
+    buildMetric({ baseUrl: KOFIA_BASE, operation: "getGrantingOfCreditBalanceInfo", field: "crdTrFingWhl", begin, end: today, label: "신용잔고" }),
+    buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "trPrc", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%ED%94%BC", begin, end: today, label: "코스피거래대금" }),
+    buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "trPrc", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%EB%8B%A5", begin, end: today, label: "코스닥거래대금" }),
+    buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "lstgMrktTotAmt", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%ED%94%BC", begin, end: today, label: "코스피시가총액" }),
   ]);
 
   const samsungHynixSeries = await fetchSamsungHynixCombinedCapSeries(kospiMktCap.series.map((r) => r.date));
   const samjeonNixRatio = buildRatioMetric(samsungHynixSeries, kospiMktCap.series);
 
-  const fredSeries = await fetchFredDaily("DGS10", addMonths(today, -1), today);
-  if (fredSeries.length === 0) throw new Error("FRED 데이터 없음");
+  const fredSeries = await fetchFredDaily("DGS10", addMonths(today, -1), today, "미국채10년");
+  if (fredSeries.length === 0) throw new Error("[미국채10년] FRED 데이터 없음");
   const us10y = fredSeries[0];
   const us10yPrev = fredSeries[1] ?? null;
   const us10yDayChangePp = us10yPrev ? us10y.value - us10yPrev.value : null;

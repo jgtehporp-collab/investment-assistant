@@ -42,16 +42,23 @@ export function isWeekend(d) {
   return w === 0 || w === 6;
 }
 
-/** 간헐적 네트워크 실패에 대비해 1회 재시도 (짧은 지연 후) */
-export async function fetchJson(url) {
-  for (let attempt = 0; attempt < 2; attempt++) {
+/**
+ * 간헐적 네트워크 실패에 대비해 재시도(기본 3회 시도, 지수 백오프: 500ms, 1000ms).
+ * label을 주면 실패 시 어떤 호출이었는지 에러 메시지에 남김 (예: "[예탁금]").
+ */
+export async function fetchJson(url, label) {
+  const maxAttempts = 3;
+  const prefix = label ? `[${label}] ` : "";
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+      if (!res.ok) throw new Error(`${prefix}HTTP ${res.status} for ${url}`);
       return await res.json();
     } catch (err) {
-      if (attempt === 1) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      if (attempt === maxAttempts - 1) {
+        throw err.message?.startsWith(prefix) || !prefix ? err : new Error(`${prefix}${err.message}`, { cause: err });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
     }
   }
 }
@@ -60,7 +67,7 @@ export async function fetchJson(url) {
 export async function fetchHolidaysForMonth(dataGoKrKey, year, month) {
   const m = String(month).padStart(2, "0");
   const url = `https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo?serviceKey=${dataGoKrKey}&solYear=${year}&solMonth=${m}&_type=json&numOfRows=50`;
-  const data = await fetchJson(url);
+  const data = await fetchJson(url, "공휴일조회");
   const items = data?.response?.body?.items?.item;
   const list = Array.isArray(items) ? items : items ? [items] : [];
   return list.filter((it) => it.isHoliday === "Y").map((it) => Number(it.locdate));
