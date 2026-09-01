@@ -46,12 +46,12 @@ export function isWeekend(d) {
  * 간헐적 네트워크 실패에 대비해 재시도(기본 3회 시도, 지수 백오프: 500ms, 1000ms).
  * label을 주면 실패 시 어떤 호출이었는지 에러 메시지에 남김 (예: "[예탁금]").
  */
-export async function fetchJson(url, label, options) {
+export async function fetchJson(url, label) {
   const maxAttempts = 3;
   const prefix = label ? `[${label}] ` : "";
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      const res = await fetch(url, options);
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`${prefix}HTTP ${res.status} for ${url}`);
       return await res.json();
     } catch (err) {
