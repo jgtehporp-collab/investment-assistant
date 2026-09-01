@@ -1,15 +1,21 @@
 #!/usr/bin/env node
-// 매일 개장전 리포트: 예탁금/신용잔고/코스피·코스닥 거래대금/미 10년물 국채금리/삼전닉스비중
+// 매일 개장전 리포트: 예탁금/신용잔고/코스피·코스닥 거래대금/미 10년물 국채금리/삼전닉스비중/보유계좌 잔고
 // 계산 후 텔레그램으로 직접 전송까지 수행 (MCP 커넥터 불필요).
-// 필요 환경변수: DATA_GO_KR_KEY (URL-encoded), FRED_API_KEY, KRX_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+// 필요 환경변수: DATA_GO_KR_KEY (URL-encoded), FRED_API_KEY, KRX_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+//               KIS_APP_KEY_1/KIS_APP_SECRET_1/KIS_ACCOUNT_1, KIS_APP_KEY_2/KIS_APP_SECRET_2/KIS_ACCOUNT_2
 
 import { nowKst, toYyyymmdd, addMonths, isWeekend, isHoliday, fetchJson, sendTelegramMessage } from "./lib/dateKst.mjs";
+import { getKisAccessToken, getKisBalance } from "./lib/kis.mjs";
 
 const DATA_GO_KR_KEY = process.env.DATA_GO_KR_KEY;
 const FRED_API_KEY = process.env.FRED_API_KEY;
 const KRX_API_KEY = process.env.KRX_API_KEY;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const KIS_ACCOUNTS = [
+  { label: "1번계좌", appKey: process.env.KIS_APP_KEY_1, appSecret: process.env.KIS_APP_SECRET_1, account: process.env.KIS_ACCOUNT_1 },
+  { label: "2번계좌", appKey: process.env.KIS_APP_KEY_2, appSecret: process.env.KIS_APP_SECRET_2, account: process.env.KIS_ACCOUNT_2 },
+].filter((a) => a.appKey && a.appSecret && a.account);
 
 if (!DATA_GO_KR_KEY || !FRED_API_KEY || !KRX_API_KEY || !TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
   console.error("DATA_GO_KR_KEY / FRED_API_KEY / KRX_API_KEY / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 환경변수가 필요합니다.");
@@ -110,6 +116,33 @@ function fmtJo(v, digits = 1) {
   return `${(v / 1e12).toFixed(digits)}조`;
 }
 
+function fmtWon(v) {
+  return `${Math.round(v / 10000).toLocaleString("ko-KR")}만원`;
+}
+
+function fmtSignedPct(v, digits = 1) {
+  if (v === null || Number.isNaN(v)) return "N/A";
+  const sign = v >= 0 ? "+" : "";
+  return `${sign}${v.toFixed(digits)}%`;
+}
+
+/** 계좌 1개의 잔고를 텔레그램 메시지용 텍스트 블록으로 만듦. 조회 실패 시 에러 라인만 반환. */
+async function buildAccountSection({ label, appKey, appSecret, account }) {
+  try {
+    const accessToken = await getKisAccessToken(appKey, appSecret, `KIS토큰-${label}`);
+    const balance = await getKisBalance(accessToken, appKey, appSecret, account, `KIS잔고-${label}`);
+    const lines = [
+      `${label}(${account}) 총평가 ${fmtWon(balance.totalEval)}, 예수금 ${fmtWon(balance.deposit)}, 평가손익 ${fmtWon(balance.totalProfit)}(${fmtSignedPct(balance.totalPurchase ? (balance.totalProfit / balance.totalPurchase) * 100 : null)})`,
+    ];
+    for (const h of balance.holdings) {
+      lines.push(`  - ${h.name} ${h.qty}주 평가 ${fmtWon(h.evalAmt)}(${fmtSignedPct(h.profitRate)})`);
+    }
+    return lines.join("\n");
+  } catch (err) {
+    return `${label} 잔고조회 실패: ${err.message}`;
+  }
+}
+
 async function buildMetric({ baseUrl, operation, field, extraParams, begin, end, label }) {
   const series = await fetchDailySeries({ baseUrl, operation, field, extraParams, begin, end, label });
   if (series.length === 0) throw new Error(`[${label}] 데이터 없음: ${operation}${extraParams}`);
@@ -194,8 +227,14 @@ async function main() {
 미 10년물 국채금리 ${us10y.value.toFixed(2)}%(전일비 ${fmtPctP(us10yDayChangePp)})
 삼전닉스비중 : ${samjeonNixRatio.value.toFixed(1)}%(전일대비 ${fmtPctP(samjeonNixRatio.dayChangePp)}, 3개월평균비 ${fmtPctP(samjeonNixRatio.avg3mChangePp)})`;
 
-  console.log(message);
-  await sendTelegramMessage(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, message);
+  let fullMessage = message;
+  if (KIS_ACCOUNTS.length > 0) {
+    const accountSections = await Promise.all(KIS_ACCOUNTS.map(buildAccountSection));
+    fullMessage += `\n\n[계좌 잔고]\n${accountSections.join("\n\n")}`;
+  }
+
+  console.log(fullMessage);
+  await sendTelegramMessage(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, fullMessage);
   console.log("SENT: telegram");
 }
 
