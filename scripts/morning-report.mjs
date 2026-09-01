@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 // 매일 개장전 리포트: 예탁금/신용잔고/코스피·코스닥 거래대금/미 10년물 국채금리/삼전닉스비중
-// 필요 환경변수: DATA_GO_KR_KEY (URL-encoded), FRED_API_KEY, KRX_API_KEY
+// 계산 후 텔레그램으로 직접 전송까지 수행 (MCP 커넥터 불필요).
+// 필요 환경변수: DATA_GO_KR_KEY (URL-encoded), FRED_API_KEY, KRX_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
-import { nowKst, toYyyymmdd, addMonths, isWeekend, isHoliday, fetchJson } from "./lib/dateKst.mjs";
+import { nowKst, toYyyymmdd, addMonths, isWeekend, isHoliday, fetchJson, sendTelegramMessage } from "./lib/dateKst.mjs";
 
 const DATA_GO_KR_KEY = process.env.DATA_GO_KR_KEY;
 const FRED_API_KEY = process.env.FRED_API_KEY;
 const KRX_API_KEY = process.env.KRX_API_KEY;
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-if (!DATA_GO_KR_KEY || !FRED_API_KEY || !KRX_API_KEY) {
-  console.error("DATA_GO_KR_KEY / FRED_API_KEY / KRX_API_KEY 환경변수가 필요합니다.");
+if (!DATA_GO_KR_KEY || !FRED_API_KEY || !KRX_API_KEY || !TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+  console.error("DATA_GO_KR_KEY / FRED_API_KEY / KRX_API_KEY / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 환경변수가 필요합니다.");
   process.exit(1);
 }
 
@@ -192,6 +195,8 @@ async function main() {
 삼전닉스비중 : ${samjeonNixRatio.value.toFixed(1)}%(전일대비 ${fmtPctP(samjeonNixRatio.dayChangePp)}, 3개월평균비 ${fmtPctP(samjeonNixRatio.avg3mChangePp)})`;
 
   console.log(message);
+  await sendTelegramMessage(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, message);
+  console.log("SENT: telegram");
 }
 
 main().catch((err) => {

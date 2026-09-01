@@ -63,6 +63,24 @@ export async function fetchJson(url, label) {
   }
 }
 
+/** 텔레그램 봇으로 메시지 전송 (4096자 제한에 맞춰 자동 분할). MCP 커넥터 없이 순수 HTTP 호출. */
+export async function sendTelegramMessage(botToken, chatId, text) {
+  const MAX_LEN = 4000;
+  const chunks = [];
+  for (let i = 0; i < text.length; i += MAX_LEN) chunks.push(text.slice(i, i + MAX_LEN));
+  for (const chunk of chunks) {
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ chat_id: chatId, text: chunk }),
+    });
+    if (!res.ok) throw new Error(`[텔레그램전송] HTTP ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(`[텔레그램전송] ${JSON.stringify(data)}`);
+  }
+}
+
 /** 한국천문연구원 특일정보로 해당 (연,월)의 공휴일 locdate 목록(YYYYMMDD 숫자)을 가져옴 */
 export async function fetchHolidaysForMonth(dataGoKrKey, year, month) {
   const m = String(month).padStart(2, "0");
