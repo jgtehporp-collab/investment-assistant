@@ -110,6 +110,40 @@ function fmtJo(v, digits = 1) {
   return `${(v / 1e12).toFixed(digits)}조`;
 }
 
+/** 폴리마켓에서 현재 진행 중인(가장 가까운 미래 FOMC) "Fed Decision" 마켓을 찾아 인상/동결/인하 3분류 확률(%)과 D-day를 구함 */
+async function fetchFedRateOutlook(today) {
+  const url = "https://gamma-api.polymarket.com/public-search?q=fed%20decision&limit_per_type=20";
+  const data = await fetchJson(url, "폴리마켓Fed금리");
+  const now = Date.now();
+  const candidates = (data.events || [])
+    .filter((e) => e.slug?.startsWith("fed-decision-in-") && e.closed === false && Array.isArray(e.markets) && e.markets.length > 0)
+    .map((e) => ({ event: e, endMs: Date.parse(e.endDate) }))
+    .filter((c) => Number.isFinite(c.endMs) && c.endMs >= now)
+    .sort((a, b) => a.endMs - b.endMs);
+  if (candidates.length === 0) throw new Error("[폴리마켓Fed금리] 진행 중인 Fed Decision 마켓을 찾지 못함");
+  const event = candidates[0].event;
+
+  let hike = 0;
+  let hold = 0;
+  let cut = 0;
+  for (const m of event.markets) {
+    const yesPrice = Number(JSON.parse(m.outcomePrices)[0]) * 100;
+    const label = m.groupItemTitle || "";
+    if (label.includes("decrease")) cut += yesPrice;
+    else if (label.includes("increase")) hike += yesPrice;
+    else if (label.toLowerCase().includes("no change")) hold += yesPrice;
+  }
+
+  const meetingDate = new Date(candidates[0].endMs);
+  const monthLabel = `${meetingDate.getUTCMonth() + 1}월`;
+  const todayMidnight = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const meetingMidnight = Date.UTC(meetingDate.getUTCFullYear(), meetingDate.getUTCMonth(), meetingDate.getUTCDate());
+  const dday = Math.round((meetingMidnight - todayMidnight) / 86400000);
+  const ddayLabel = dday === 0 ? "D-DAY" : dday > 0 ? `D-${dday}` : `D+${-dday}`;
+
+  return { monthLabel, ddayLabel, hike, hold, cut };
+}
+
 async function buildMetric({ baseUrl, operation, field, extraParams, begin, end, label }) {
   const series = await fetchDailySeries({ baseUrl, operation, field, extraParams, begin, end, label });
   if (series.length === 0) throw new Error(`[${label}] 데이터 없음: ${operation}${extraParams}`);
@@ -183,6 +217,14 @@ async function main() {
 
   const ratio = buildRatioMetric(credit.series, deposit.series);
 
+  let fedLine = null;
+  try {
+    const fed = await fetchFedRateOutlook(today);
+    fedLine = `${fed.monthLabel} FOMC(${fed.ddayLabel}) 예측(폴리마켓): 인상 ${fed.hike.toFixed(1)}% / 동결 ${fed.hold.toFixed(1)}% / 인하 ${fed.cut.toFixed(1)}%`;
+  } catch (err) {
+    console.error(`FOMC 예측 조회 실패, 건너뜀: ${err.message}`);
+  }
+
   const dateLabel = `${today.getUTCFullYear()}.${String(today.getUTCMonth() + 1).padStart(2, "0")}.${String(today.getUTCDate()).padStart(2, "0")}`;
 
   const message = `${dateLabel} 개장전 정보 말씀드립니다.
@@ -192,7 +234,7 @@ async function main() {
 코스피 일평균거래대금 ${fmtJo(kospi.value)}(전일비 ${fmtPct(kospi.dayChangePct)}, 3개월평균비 ${fmtPct(kospi.avg3mChangePct)})
 코스닥 일평균거래대금 ${fmtJo(kosdaq.value)}(전일비 ${fmtPct(kosdaq.dayChangePct)}, 3개월평균비 ${fmtPct(kosdaq.avg3mChangePct)})
 미 10년물 국채금리 ${us10y.value.toFixed(2)}%(전일비 ${fmtPctP(us10yDayChangePp)})
-삼전닉스비중 : ${samjeonNixRatio.value.toFixed(1)}%(전일대비 ${fmtPctP(samjeonNixRatio.dayChangePp)}, 3개월평균비 ${fmtPctP(samjeonNixRatio.avg3mChangePp)})`;
+삼전닉스비중 : ${samjeonNixRatio.value.toFixed(1)}%(전일대비 ${fmtPctP(samjeonNixRatio.dayChangePp)}, 3개월평균비 ${fmtPctP(samjeonNixRatio.avg3mChangePp)})${fedLine ? `\n${fedLine}` : ""}`;
 
   console.log(message);
   await sendTelegramMessage(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, message);
