@@ -198,13 +198,15 @@ async function main() {
   const KOFIA_BASE = "https://apis.data.go.kr/1160100/service/GetKofiaStatisticsInfoService";
   const INDEX_BASE = "https://apis.data.go.kr/1160100/service/GetMarketIndexInfoService";
 
-  const [deposit, credit, kospi, kosdaq, kospiMktCap] = await Promise.all([
-    buildMetric({ baseUrl: KOFIA_BASE, operation: "getSecuritiesMarketTotalCapitalInfo", field: "invrDpsgAmt", begin, end: today, label: "예탁금" }),
-    buildMetric({ baseUrl: KOFIA_BASE, operation: "getGrantingOfCreditBalanceInfo", field: "crdTrFingWhl", begin, end: today, label: "신용잔고" }),
-    buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "trPrc", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%ED%94%BC", begin, end: today, label: "코스피거래대금" }),
-    buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "trPrc", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%EB%8B%A5", begin, end: today, label: "코스닥거래대금" }),
-    buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "lstgMrktTotAmt", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%ED%94%BC", begin, end: today, label: "코스피시가총액" }),
-  ]);
+  const dataGoKrJobs = [
+    () => buildMetric({ baseUrl: KOFIA_BASE, operation: "getSecuritiesMarketTotalCapitalInfo", field: "invrDpsgAmt", begin, end: today, label: "예탁금" }),
+    () => buildMetric({ baseUrl: KOFIA_BASE, operation: "getGrantingOfCreditBalanceInfo", field: "crdTrFingWhl", begin, end: today, label: "신용잔고" }),
+    () => buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "trPrc", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%ED%94%BC", begin, end: today, label: "코스피거래대금" }),
+    () => buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "trPrc", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%EB%8B%A5", begin, end: today, label: "코스닥거래대금" }),
+    () => buildMetric({ baseUrl: INDEX_BASE, operation: "getStockMarketIndex", field: "lstgMrktTotAmt", extraParams: "&idxNm=%EC%BD%94%EC%8A%A4%ED%94%BC", begin, end: today, label: "코스피시가총액" }),
+  ];
+  // data.go.kr가 동시 요청에 취약해 보여(임의의 호출이 간헐적으로 실패) 동시성을 2로 제한
+  const [deposit, credit, kospi, kosdaq, kospiMktCap] = await mapWithConcurrency(dataGoKrJobs, 2, (job) => job());
 
   const samsungHynixSeries = await fetchSamsungHynixCombinedCapSeries(kospiMktCap.series.map((r) => r.date));
   const samjeonNixRatio = buildRatioMetric(samsungHynixSeries, kospiMktCap.series);
