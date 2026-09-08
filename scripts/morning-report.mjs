@@ -217,12 +217,13 @@ async function main() {
 
   const ratio = buildRatioMetric(credit.series, deposit.series);
 
-  let fedLine = null;
+  let fedLine;
   try {
     const fed = await fetchFedRateOutlook(today);
     fedLine = `${fed.monthLabel} FOMC(${fed.ddayLabel}) 예측(폴리마켓): 인상 ${fed.hike.toFixed(1)}% / 동결 ${fed.hold.toFixed(1)}% / 인하 ${fed.cut.toFixed(1)}%`;
   } catch (err) {
-    console.error(`FOMC 예측 조회 실패, 건너뜀: ${err.message}`);
+    console.error(`FOMC 예측 조회 실패: ${err.message}`);
+    fedLine = "FOMC 예측(폴리마켓): 조회 실패";
   }
 
   const dateLabel = `${today.getUTCFullYear()}.${String(today.getUTCMonth() + 1).padStart(2, "0")}.${String(today.getUTCDate()).padStart(2, "0")}`;
