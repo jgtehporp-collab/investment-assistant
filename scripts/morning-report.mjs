@@ -208,6 +208,18 @@ async function main() {
   // data.go.kr가 동시 요청에 취약해 보여(임의의 호출이 간헐적으로 실패) 동시성을 2로 제한
   const [deposit, credit, kospi, kosdaq, kospiMktCap] = await mapWithConcurrency(dataGoKrJobs, 2, (job) => job());
 
+  // 폴리마켓 조회는 KRX 대량 호출(아래) 전에 먼저 끝내둔다.
+  // KRX 쪽에서 ~90회 가까운 연쇄 호출이 이어지는데, 그 뒤에 전혀 다른 호스트로
+  // 요청을 보내면 연결 풀이 소진돼있어 간헐적으로 실패하는 경우가 있었음.
+  let fedLine;
+  try {
+    const fed = await fetchFedRateOutlook(today);
+    fedLine = `${fed.monthLabel} FOMC(${fed.ddayLabel}) 예측(폴리마켓): 인상 ${fed.hike.toFixed(1)}% / 동결 ${fed.hold.toFixed(1)}% / 인하 ${fed.cut.toFixed(1)}%`;
+  } catch (err) {
+    console.error(`FOMC 예측 조회 실패: ${err.message}`);
+    fedLine = "FOMC 예측(폴리마켓): 조회 실패";
+  }
+
   const samsungHynixSeries = await fetchSamsungHynixCombinedCapSeries(kospiMktCap.series.map((r) => r.date));
   const samjeonNixRatio = buildRatioMetric(samsungHynixSeries, kospiMktCap.series);
 
@@ -218,15 +230,6 @@ async function main() {
   const us10yDayChangePp = us10yPrev ? us10y.value - us10yPrev.value : null;
 
   const ratio = buildRatioMetric(credit.series, deposit.series);
-
-  let fedLine;
-  try {
-    const fed = await fetchFedRateOutlook(today);
-    fedLine = `${fed.monthLabel} FOMC(${fed.ddayLabel}) 예측(폴리마켓): 인상 ${fed.hike.toFixed(1)}% / 동결 ${fed.hold.toFixed(1)}% / 인하 ${fed.cut.toFixed(1)}%`;
-  } catch (err) {
-    console.error(`FOMC 예측 조회 실패: ${err.message}`);
-    fedLine = "FOMC 예측(폴리마켓): 조회 실패";
-  }
 
   const dateLabel = `${today.getUTCFullYear()}.${String(today.getUTCMonth() + 1).padStart(2, "0")}.${String(today.getUTCDate()).padStart(2, "0")}`;
 
