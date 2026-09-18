@@ -81,6 +81,21 @@ export async function sendTelegramMessage(botToken, chatId, text) {
   }
 }
 
+/** 텔레그램 봇으로 사진 전송 (로컬 파일 경로). MCP 커넥터 없이 순수 HTTP 호출. */
+export async function sendTelegramPhoto(botToken, chatId, filePath, caption) {
+  const { readFileSync } = await import("node:fs");
+  const buf = readFileSync(filePath);
+  const form = new FormData();
+  form.append("chat_id", chatId);
+  if (caption) form.append("caption", caption);
+  form.append("photo", new Blob([buf], { type: "image/png" }), "report.png");
+  const url = `https://api.telegram.org/bot${botToken}/sendPhoto`;
+  const res = await fetch(url, { method: "POST", body: form });
+  if (!res.ok) throw new Error(`[텔레그램사진전송] HTTP ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  if (!data.ok) throw new Error(`[텔레그램사진전송] ${JSON.stringify(data)}`);
+}
+
 /** 한국천문연구원 특일정보로 해당 (연,월)의 공휴일 locdate 목록(YYYYMMDD 숫자)을 가져옴 */
 export async function fetchHolidaysForMonth(dataGoKrKey, year, month) {
   const m = String(month).padStart(2, "0");
