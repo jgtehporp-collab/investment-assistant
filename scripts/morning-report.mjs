@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 매일 개장전 리포트: 예탁금/신용잔고/코스피·코스닥 거래대금/미 10년물 국채금리/삼전닉스비중
+// 매일 개장전 리포트: 예탁금/신용잔고/코스피·코스닥 거래대금/미 10년물 국채금리/원달러/삼전닉스비중
 // 계산 후 텔레그램으로 직접 전송까지 수행 (MCP 커넥터 불필요).
 // 필요 환경변수: DATA_GO_KR_KEY (URL-encoded), FRED_API_KEY, KRX_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
@@ -229,6 +229,12 @@ async function main() {
   const us10yPrev = fredSeries[1] ?? null;
   const us10yDayChangePp = us10yPrev ? us10y.value - us10yPrev.value : null;
 
+  const krwUsdSeries = await fetchFredDaily("DEXKOUS", addMonths(today, -1), today, "원달러");
+  if (krwUsdSeries.length === 0) throw new Error("[원달러] FRED 데이터 없음");
+  const krwUsd = krwUsdSeries[0];
+  const krwUsdPrev = krwUsdSeries[1] ?? null;
+  const krwUsdDayChangePct = krwUsdPrev ? pctChange(krwUsd.value, krwUsdPrev.value) : null;
+
   const ratio = buildRatioMetric(credit.series, deposit.series);
 
   const dateLabel = `${today.getUTCFullYear()}.${String(today.getUTCMonth() + 1).padStart(2, "0")}.${String(today.getUTCDate()).padStart(2, "0")}`;
@@ -240,6 +246,7 @@ async function main() {
 코스피 일평균거래대금 ${fmtJo(kospi.value)}(전일비 ${fmtPct(kospi.dayChangePct)}, 3개월평균비 ${fmtPct(kospi.avg3mChangePct)})
 코스닥 일평균거래대금 ${fmtJo(kosdaq.value)}(전일비 ${fmtPct(kosdaq.dayChangePct)}, 3개월평균비 ${fmtPct(kosdaq.avg3mChangePct)})
 미 10년물 국채금리 ${us10y.value.toFixed(2)}%(전일비 ${fmtPctP(us10yDayChangePp)})
+원/달러 ${krwUsd.value.toFixed(1)}원(전일비 ${fmtPct(krwUsdDayChangePct)})
 삼전닉스비중 : ${samjeonNixRatio.value.toFixed(1)}%(전일대비 ${fmtPctP(samjeonNixRatio.dayChangePp)}, 3개월평균비 ${fmtPctP(samjeonNixRatio.avg3mChangePp)})${fedLine ? `\n${fedLine}` : ""}`;
 
   console.log(message);
