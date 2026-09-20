@@ -9,13 +9,14 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { nowKst, toIsoDate, sendTelegramPhoto } from "./lib/dateKst.mjs";
+import { nowKst, toIsoDate, sendTelegramPhoto, isFirstBusinessDayOfWeek } from "./lib/dateKst.mjs";
 import { fetchRebWeeklySeries, REB_STATBL, REB_REGION_CLS } from "./lib/reb.mjs";
 import { fetchMonthDealDays, CAPITAL_LAWD_CODES, REGIONAL_LAWD_CODES } from "./lib/molit.mjs";
 import { recordObservations, getMultiplier } from "./lib/volume-estimate.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HISTORY_PATH = join(__dirname, "..", "data", "realestate-volume-history.json");
+const MONTHLY_HISTORY_PATH = join(__dirname, "..", "data", "realestate-monthly-volume-history.json");
 
 const DATA_GO_KR_KEY = process.env.DATA_GO_KR_KEY;
 const REB_KEY = process.env.REB_KEY;
@@ -56,6 +57,10 @@ function fmtDaily(weeklyTotal) {
 
 async function main() {
   const today = nowKst();
+  if (!(await isFirstBusinessDayOfWeek(DATA_GO_KR_KEY, today))) {
+    console.log("SKIP: 이번 주 첫 영업일이 아님");
+    return;
+  }
   const todayIso = toIsoDate(today);
 
   const rebSeries = {};
@@ -111,6 +116,18 @@ async function main() {
     for (const days of Object.values(dealsByMonth.regional[ym])) regional += days.length;
     return { ym, capital, regional };
   });
+
+  // 3개년 월간 거래량 캐시 갱신 (최근 몇 개월만 최신 실측치로 덮어쓰고, 그 이전 정착된 달은 그대로 둠)
+  const monthlyHistory = JSON.parse(readFileSync(MONTHLY_HISTORY_PATH, "utf-8"));
+  for (const row of monthlyVolume) {
+    monthlyHistory["수도권"][row.ym] = row.capital;
+    monthlyHistory["지방권"][row.ym] = row.regional;
+  }
+  writeFileSync(MONTHLY_HISTORY_PATH, JSON.stringify(monthlyHistory, null, 2));
+  const monthly3y = Object.keys(monthlyHistory["수도권"])
+    .sort()
+    .slice(-36)
+    .map((ym) => ({ ym, capital: monthlyHistory["수도권"][ym], regional: monthlyHistory["지방권"][ym] }));
 
   // 신고지연 보정 배수 적용 + 관측 기록
   const history = JSON.parse(readFileSync(HISTORY_PATH, "utf-8"));
@@ -203,6 +220,19 @@ async function main() {
     </div>
     <script>
       window.__barData = { labels: ${JSON.stringify(labels)}, capital: ${JSON.stringify(monthlyVolume.map((r) => r.capital))}, regional: ${JSON.stringify(monthlyVolume.map((r) => r.regional))} };
+    </script>`;
+  }
+
+  function monthly3yChartSection() {
+    return `
+    <div class="chartwrap">
+      <div class="charttitle">월간 거래량(원시) · 최근 3개년</div>
+      <canvas id="monthly3y" width="892" height="260"></canvas>
+      <div class="legend"><span class="dot capital"></span>수도권 <span class="dot regional"></span>지방권</div>
+      <p class="note">※ 원시 신고 건수 기준(보정 미적용) — 최근월은 신고 지연으로 낮게 나올 수 있음</p>
+    </div>
+    <script>
+      window.__splineData = { labels: ${JSON.stringify(monthly3y.map((r) => r.ym))}, capital: ${JSON.stringify(monthly3y.map((r) => r.capital))}, regional: ${JSON.stringify(monthly3y.map((r) => r.regional))} };
     </script>`;
   }
 
@@ -332,8 +362,65 @@ function drawBarChart() {
     ctx.fillText(d.labels[i], cx, padTop + plotH + 20);
   }
 }
+function drawSplineChart() {
+  const d = window.__splineData;
+  const canvas = document.getElementById('monthly3y');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height, padTop = 12, padBottom = 34, padLeft = 52, padRight = 16;
+  const plotH = H - padTop - padBottom;
+  const all = d.capital.concat(d.regional);
+  const min = Math.min(...all), max = Math.max(...all);
+  const n = d.capital.length;
+  function xy(i, v) {
+    const x = padLeft + (i / (n - 1)) * (W - padLeft - padRight);
+    const y = padTop + plotH - ((v - min) / (max - min || 1)) * plotH;
+    return [x, y];
+  }
+  ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = '#EBEFF7'; ctx.lineWidth = 1;
+  ctx.fillStyle = '#6B7488';
+  ctx.font = '11px "Noto Sans KR", sans-serif';
+  ctx.textAlign = 'right';
+  for (let g = 0; g <= 4; g++) {
+    const y = padTop + (g / 4) * plotH;
+    const val = max - (g / 4) * (max - min);
+    ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(W - padRight, y); ctx.stroke();
+    ctx.fillText(Math.round(val).toLocaleString(), padLeft - 8, y + 3);
+  }
+  // Catmull-Rom -> Bezier 스플라인으로 부드러운 곡선 그리기
+  function drawSpline(series, color) {
+    const pts = series.map((v, i) => xy(i, v));
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2] || p2;
+      const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+      const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+      const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2[0], p2[1]);
+    }
+    ctx.stroke();
+  }
+  drawSpline(d.capital, '#2E56E6');
+  drawSpline(d.regional, '#E23B37');
+  ctx.textAlign = 'center';
+  ctx.strokeStyle = '#DEE4F0';
+  const tickCount = 9;
+  const tickIdx = Array.from({ length: tickCount }, (_, k) => Math.round((k / (tickCount - 1)) * (n - 1)));
+  [...new Set(tickIdx)].forEach((i) => {
+    const [x] = xy(i, d.capital[i]);
+    const label = d.labels[i].slice(0, 4) + '/' + d.labels[i].slice(4, 6);
+    ctx.beginPath(); ctx.moveTo(x, padTop + plotH); ctx.lineTo(x, padTop + plotH + 5); ctx.stroke();
+    ctx.fillText(label, x, padTop + plotH + 18);
+  });
+}
 if (window.__chartData) Object.keys(window.__chartData).forEach(drawChart);
 if (window.__barData) drawBarChart();
+if (window.__splineData) drawSplineChart();
 window.__renderReady = true;`;
 
   function buildPage(sectionTitle, bodyHtml) {
@@ -357,7 +444,7 @@ window.__renderReady = true;`;
     { caption: `2/3 ${asOfDisplay} 수급동향(심리지수)`, html: buildPage("수급동향(심리지수)", combinedSection("수급동향(심리지수, 매매·전세)", [metrics[2], metrics[3]])) },
     {
       caption: `3/3 ${asOfDisplay} 아파트 매매 거래량`,
-      html: buildPage("아파트 매매 거래량", `<div class="section"><h2>아파트 매매 거래량</h2>${buildVolumeTable()}${monthlyVolumeChartSection()}</div>`),
+      html: buildPage("아파트 매매 거래량", `<div class="section"><h2>아파트 매매 거래량</h2>${buildVolumeTable()}${monthlyVolumeChartSection()}${monthly3yChartSection()}</div>`),
     },
   ];
 
