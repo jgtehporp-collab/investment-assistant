@@ -43,11 +43,13 @@ export function isWeekend(d) {
 }
 
 /**
- * 간헐적 네트워크 실패에 대비해 재시도(기본 3회 시도, 지수 백오프: 500ms, 1000ms).
+ * 간헐적 네트워크 실패에 대비해 재시도(기본 5회 시도, 지수 백오프: 1s, 2s, 4s, 8s).
+ * 공공데이터포털(apis.data.go.kr)이 가끔 몇 초~몇십 초 단위로 끊기는 경우가 있어
+ * 예전(3회, 500ms~1s)보다 더 길게 버티도록 늘림.
  * label을 주면 실패 시 어떤 호출이었는지 에러 메시지에 남김 (예: "[예탁금]").
  */
 export async function fetchJson(url, label) {
-  const maxAttempts = 3;
+  const maxAttempts = 5;
   const prefix = label ? `[${label}] ` : "";
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
@@ -58,7 +60,7 @@ export async function fetchJson(url, label) {
       if (attempt === maxAttempts - 1) {
         throw err.message?.startsWith(prefix) || !prefix ? err : new Error(`${prefix}${err.message}`, { cause: err });
       }
-      await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
+      await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt));
     }
   }
 }
@@ -96,14 +98,33 @@ export async function sendTelegramPhoto(botToken, chatId, filePath, caption) {
   if (!data.ok) throw new Error(`[텔레그램사진전송] ${JSON.stringify(data)}`);
 }
 
-/** 한국천문연구원 특일정보로 해당 (연,월)의 공휴일 locdate 목록(YYYYMMDD 숫자)을 가져옴 */
+// apis.data.go.kr(공공데이터포털)이 간헐적으로 끊겨 "공휴일조회" 자체가 실패하면
+// 영업일 판단이 안 돼서 전체 Routine이 멎어버림 — 이걸 막기 위한 수동 관리 백업표.
+// 매년 1회(또는 새해 자동화 전) 다음 해 분을 추가해줄 것. 출처: 관공서의 공휴일에 관한 규정
+// (대체공휴일 포함, 근로자의날/투표일처럼 법정공휴일이 아닌 날은 제외 — 실제 API와 동일 기준).
+const STATIC_HOLIDAYS_FALLBACK = {
+  2026: [
+    20260101, 20260216, 20260217, 20260218, 20260301, 20260302, 20260505, 20260524, 20260525,
+    20260606, 20260815, 20260817, 20260924, 20260925, 20260926, 20261003, 20261005, 20261009, 20261225,
+  ],
+};
+
+/** 한국천문연구원 특일정보로 해당 (연,월)의 공휴일 locdate 목록(YYYYMMDD 숫자)을 가져옴.
+ *  라이브 API가 재시도 끝에도 실패하면 STATIC_HOLIDAYS_FALLBACK으로 대체(해당 연도 없으면 에러 그대로 던짐). */
 export async function fetchHolidaysForMonth(dataGoKrKey, year, month) {
   const m = String(month).padStart(2, "0");
   const url = `https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo?serviceKey=${dataGoKrKey}&solYear=${year}&solMonth=${m}&_type=json&numOfRows=50`;
-  const data = await fetchJson(url, "공휴일조회");
-  const items = data?.response?.body?.items?.item;
-  const list = Array.isArray(items) ? items : items ? [items] : [];
-  return list.filter((it) => it.isHoliday === "Y").map((it) => Number(it.locdate));
+  try {
+    const data = await fetchJson(url, "공휴일조회");
+    const items = data?.response?.body?.items?.item;
+    const list = Array.isArray(items) ? items : items ? [items] : [];
+    return list.filter((it) => it.isHoliday === "Y").map((it) => Number(it.locdate));
+  } catch (err) {
+    const fallback = STATIC_HOLIDAYS_FALLBACK[year];
+    if (!fallback) throw err;
+    console.error(`[공휴일조회] 라이브 API 실패, ${year}년 정적 백업표로 대체: ${err.message}`);
+    return fallback.filter((d) => Math.floor(d / 100) === year * 100 + Number(month));
+  }
 }
 
 export async function isHoliday(dataGoKrKey, kstDate) {
