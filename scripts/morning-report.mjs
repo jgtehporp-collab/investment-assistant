@@ -5,6 +5,7 @@
 
 import { nowKst, toYyyymmdd, addMonths, isWeekend, isHoliday, isFirstBusinessDayOfWeek, fetchJson, sendTelegramMessage } from "./lib/dateKst.mjs";
 import { getRecentTradingDays, buildOversoldList } from "./lib/rsiScreener.mjs";
+import { buildUsIpoOverheatSignal } from "./lib/ipoOverheat.mjs";
 
 const DATA_GO_KR_KEY = process.env.DATA_GO_KR_KEY;
 const FRED_API_KEY = process.env.FRED_API_KEY;
@@ -254,9 +255,37 @@ async function main() {
   await sendTelegramMessage(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, message);
   console.log("SENT: telegram");
 
-  // 주1회(첫영업일) 과매도(RSI14<=30) 스크리너 — 본 리포트와 별개 메시지, 실패해도 본 리포트는 이미 전송됨
+  // 주1회(첫영업일) 과매도(RSI14<=30) 스크리너 + IPO 시장 과열 신호 — 본 리포트와 별개 메시지, 실패해도 본 리포트는 이미 전송됨
   if (await isFirstBusinessDayOfWeek(DATA_GO_KR_KEY, today)) {
     await sendOversoldScreener(today, dateLabel);
+    await sendIpoOverheatSignal(today, dateLabel);
+  }
+}
+
+async function sendIpoOverheatSignal(today, dateLabel) {
+  let usSection;
+  try {
+    const us = await buildUsIpoOverheatSignal(today);
+    const trendArrow = us.trendPp === null ? "" : us.trendPp > 0 ? "▲개선" : us.trendPp < 0 ? "▼악화" : "-횡보";
+    usSection = `[미국] ${us.zone} (상대강도 ${fmtPctP(us.relStrengthPp)}, 1주전비 ${trendArrow} ${us.trendPp !== null ? fmtPctP(us.trendPp) : "N/A"})
+  Renaissance IPO ETF 3개월 ${fmtPct(us.ipo3mReturn)} vs S&P500 3개월 ${fmtPct(us.mkt3mReturn)}
+  변동성(IPO/시장) ${us.volRatio !== null ? us.volRatio.toFixed(1) + "배" : "N/A"}`;
+  } catch (err) {
+    console.error(`IPO과열신호 미국 실패: ${err.message}`);
+    usSection = "[미국] 조회 실패";
+  }
+
+  // 국내(현대 UNICORN 포스트IPO 액티브)는 KRX ETF 데이터셋 권한 대기 중이라 아직 생략
+
+  const message = `${dateLabel} IPO 시장 과열 신호 (상대강도 ±5%p 기준: 시장과열/중립/위험회피)
+
+${usSection}`;
+  console.log(message);
+  try {
+    await sendTelegramMessage(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, message);
+    console.log("SENT: telegram (IPO 과열신호)");
+  } catch (err) {
+    console.error(`IPO 과열신호 전송 실패: ${err.message}`);
   }
 }
 

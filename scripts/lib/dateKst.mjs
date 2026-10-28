@@ -48,12 +48,12 @@ export function isWeekend(d) {
  * 예전(3회, 500ms~1s)보다 더 길게 버티도록 늘림.
  * label을 주면 실패 시 어떤 호출이었는지 에러 메시지에 남김 (예: "[예탁금]").
  */
-export async function fetchJson(url, label) {
+export async function fetchJson(url, label, init) {
   const maxAttempts = 5;
   const prefix = label ? `[${label}] ` : "";
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, init);
       if (!res.ok) throw new Error(`${prefix}HTTP ${res.status} for ${url}`);
       return await res.json();
     } catch (err) {
