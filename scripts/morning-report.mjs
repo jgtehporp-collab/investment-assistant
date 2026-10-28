@@ -5,7 +5,7 @@
 
 import { nowKst, toYyyymmdd, addMonths, isWeekend, isHoliday, isFirstBusinessDayOfWeek, fetchJson, sendTelegramMessage } from "./lib/dateKst.mjs";
 import { getRecentTradingDays, buildOversoldList } from "./lib/rsiScreener.mjs";
-import { buildUsIpoOverheatSignal } from "./lib/ipoOverheat.mjs";
+import { buildUsIpoOverheatSignal, buildKrIpoOverheatSignal } from "./lib/ipoOverheat.mjs";
 
 const DATA_GO_KR_KEY = process.env.DATA_GO_KR_KEY;
 const FRED_API_KEY = process.env.FRED_API_KEY;
@@ -275,11 +275,22 @@ async function sendIpoOverheatSignal(today, dateLabel) {
     usSection = "[미국] 조회 실패";
   }
 
-  // 국내(현대 UNICORN 포스트IPO 액티브)는 KRX ETF 데이터셋 권한 대기 중이라 아직 생략
+  let krSection;
+  try {
+    const kr = await buildKrIpoOverheatSignal(DATA_GO_KR_KEY, KRX_API_KEY, today);
+    const trendArrow = kr.trendPp === null ? "" : kr.trendPp > 0 ? "▲개선" : kr.trendPp < 0 ? "▼악화" : "-횡보";
+    krSection = `[한국] ${kr.zone} (상대강도 ${fmtPctP(kr.relStrengthPp)}, 1주전비 ${trendArrow} ${kr.trendPp !== null ? fmtPctP(kr.trendPp) : "N/A"})
+  현대 UNICORN 포스트IPO액티브 3개월 ${fmtPct(kr.ipo3mReturn)} vs 코스피 3개월 ${fmtPct(kr.mkt3mReturn)}`;
+  } catch (err) {
+    console.error(`IPO과열신호 한국 실패: ${err.message}`);
+    krSection = "[한국] 조회 실패";
+  }
 
   const message = `${dateLabel} IPO 시장 과열 신호 (상대강도 ±5%p 기준: 시장과열/중립/위험회피)
 
-${usSection}`;
+${usSection}
+
+${krSection}`;
   console.log(message);
   try {
     await sendTelegramMessage(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, message);
