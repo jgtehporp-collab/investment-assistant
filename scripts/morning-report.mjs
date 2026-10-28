@@ -3,7 +3,8 @@
 // 계산 후 텔레그램으로 직접 전송까지 수행 (MCP 커넥터 불필요).
 // 필요 환경변수: DATA_GO_KR_KEY (URL-encoded), FRED_API_KEY, KRX_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 
-import { nowKst, toYyyymmdd, addMonths, isWeekend, isHoliday, fetchJson, sendTelegramMessage } from "./lib/dateKst.mjs";
+import { nowKst, toYyyymmdd, addMonths, isWeekend, isHoliday, isFirstBusinessDayOfWeek, fetchJson, sendTelegramMessage } from "./lib/dateKst.mjs";
+import { getRecentTradingDays, buildOversoldList } from "./lib/rsiScreener.mjs";
 
 const DATA_GO_KR_KEY = process.env.DATA_GO_KR_KEY;
 const FRED_API_KEY = process.env.FRED_API_KEY;
@@ -252,6 +253,53 @@ async function main() {
   console.log(message);
   await sendTelegramMessage(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, message);
   console.log("SENT: telegram");
+
+  // 주1회(첫영업일) 과매도(RSI14<=30) 스크리너 — 본 리포트와 별개 메시지, 실패해도 본 리포트는 이미 전송됨
+  if (await isFirstBusinessDayOfWeek(DATA_GO_KR_KEY, today)) {
+    await sendOversoldScreener(today, dateLabel);
+  }
+}
+
+async function sendOversoldScreener(today, dateLabel) {
+  const tradingDates = await getRecentTradingDays(DATA_GO_KR_KEY, today, 30);
+  const sections = [];
+
+  try {
+    const kospiList = await buildOversoldList({ market: "KOSPI", krxApiKey: KRX_API_KEY, tradingDates });
+    sections.push(formatOversoldSection("코스피", kospiList));
+  } catch (err) {
+    console.error(`RSI스크리너 코스피 실패: ${err.message}`);
+    sections.push("코스피: 조회 실패");
+  }
+
+  try {
+    const kosdaqList = await buildOversoldList({ market: "KOSDAQ", krxApiKey: KRX_API_KEY, tradingDates });
+    sections.push(formatOversoldSection("코스닥", kosdaqList));
+  } catch (err) {
+    console.error(`RSI스크리너 코스닥 스킵(권한 또는 조회 실패): ${err.message}`);
+    // 코스닥 KRX 데이터셋 권한이 아직 없을 수 있어 조용히 생략 (코스피 결과는 그대로 전송)
+  }
+
+  if (sections.length === 0) return;
+  const screenerMessage = `${dateLabel} 주간 과매도(RSI14≤30) 스크리너 (시총 1조원 이상 또는 시총순위 300위 이내)
+
+${sections.join("\n\n")}`;
+  console.log(screenerMessage);
+  try {
+    await sendTelegramMessage(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, screenerMessage);
+    console.log("SENT: telegram (오버솔드 스크리너)");
+  } catch (err) {
+    console.error(`오버솔드 스크리너 전송 실패: ${err.message}`);
+  }
+}
+
+function formatOversoldSection(marketLabel, list) {
+  if (list.length === 0) return `[${marketLabel}] 조건에 해당하는 종목 없음`;
+  const lines = list.map(
+    (r, i) =>
+      `${i + 1}. ${r.name}(${r.code}) RSI ${r.rsi.toFixed(1)} | 시총 ${fmtJo(r.mktCap)} | 전일 ${fmtPct(r.flucRt)}`
+  );
+  return `[${marketLabel}]\n${lines.join("\n")}`;
 }
 
 main().catch((err) => {
