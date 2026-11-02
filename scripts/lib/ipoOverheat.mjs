@@ -146,7 +146,10 @@ async function fetchKrEtfCloseNear(krxApiKey, targetDateStr, maxLookbackDays = 1
     const data = await fetchJson(url, `IPO과열신호 UNICORN ${cursor}`);
     if (data?.respCode) throw new Error(`[IPO과열신호 UNICORN] ${data.respCode} ${data.respMsg}`);
     const row = (data.OutBlock_1 || []).find((r) => r.ISU_CD === KR_ETF_CODE);
-    if (row) return { date: cursor, close: Number(row.TDD_CLSPRC) };
+    // 그날 거래가 아예 없으면 KRX가 TDD_CLSPRC 등 전 필드를 빈 문자열로 내려줌
+    // (Number("")===0이라 "정상 값 0"과 구분이 안 되니, 양수인지까지 확인해야 함).
+    const close = row ? Number(row.TDD_CLSPRC) : null;
+    if (close !== null && Number.isFinite(close) && close > 0) return { date: cursor, close };
     cursor = shiftDaysYyyymmdd(cursor, -1);
   }
   return null;
